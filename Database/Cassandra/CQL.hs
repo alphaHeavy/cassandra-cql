@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings, GeneralizedNewtypeDeriving, ScopedTypeVariables,
         FlexibleInstances, DeriveDataTypeable, UndecidableInstances,
-        BangPatterns, OverlappingInstances, DataKinds, GADTs, KindSignatures #-}
+        BangPatterns, OverlappingInstances, DataKinds, GADTs, KindSignatures,
+        DefaultSignatures, TypeOperators #-}
 -- | Haskell client for Cassandra's CQL protocol
 --
 -- For examples, take a look at the /tests/ directory in the source archive. 
@@ -189,6 +190,7 @@ import Data.Typeable
 import Data.UUID (UUID)
 import qualified Data.UUID as UUID
 import Data.Word
+import GHC.Generics
 import Network.Socket (Socket, HostName, ServiceName, getAddrInfo, socket, AddrInfo(..),
     connect, sClose, SockAddr(..), SocketType(..), defaultHints)
 import Network.Socket.ByteString (send, sendAll, recv)
@@ -1124,6 +1126,24 @@ class CasValues v where
     encodeValues :: v -> [CType] -> Either CodingFailure [Maybe ByteString]
     decodeValues :: [(CType, Maybe ByteString)] -> Either CodingFailure v
 
+    default encodeValues :: (Generic v, GCasValues (Rep v)) => v -> [CType] -> Either CodingFailure [Maybe ByteString]
+    encodeValues v = gencodeValues (encodeNested 0) (from v) ()
+
+class GCasValues (f :: * -> *) where
+    gencodeValues :: CasNested b => (forall a . CasNested a => a -> r) -> f v -> b -> r
+
+instance (GCasValues f) => GCasValues (M1 i c f) where
+    gencodeValues f (M1 m) = gencodeValues f m
+
+instance (GCasValues x, GCasValues y) => GCasValues (x :*: y) where
+    gencodeValues f (x :*: y) = gencodeValues (gencodeValues f y) x
+
+instance (CasType c) => GCasValues (K1 i c) where
+    gencodeValues f (K1 v) b = f (v, b)
+
+instance GCasValues U1 where
+    gencodeValues f _ = f
+
 instance CasValues () where
     encodeValues () types = encodeNested 0 () types
     decodeValues vs = decodeNested 0 vs
@@ -1133,32 +1153,24 @@ instance CasType a => CasValues a where
     decodeValues vs = (\(a, ()) -> a) <$> decodeNested 0 vs
 
 instance (CasType a, CasType b) => CasValues (a, b) where
-    encodeValues (a, b) = encodeNested 0 (a, (b, ()))
     decodeValues vs = (\(a, (b, ())) -> (a, b)) <$> decodeNested 0 vs
 
 instance (CasType a, CasType b, CasType c) => CasValues (a, b, c) where
-    encodeValues (a, b, c) = encodeNested 0 (a, (b, (c, ())))
     decodeValues vs = (\(a, (b, (c, ()))) -> (a, b, c)) <$> decodeNested 0 vs
 
 instance (CasType a, CasType b, CasType c, CasType d) => CasValues (a, b, c, d) where
-    encodeValues (a, b, c, d) = encodeNested 0 (a, (b, (c, (d, ()))))
     decodeValues vs = (\(a, (b, (c, (d, ())))) -> (a, b, c, d)) <$> decodeNested 0 vs
 
 instance (CasType a, CasType b, CasType c, CasType d, CasType e) => CasValues (a, b, c, d, e) where
-    encodeValues (a, b, c, d, e) = encodeNested 0 (a, (b, (c, (d, (e, ())))))
     decodeValues vs = (\(a, (b, (c, (d, (e, ()))))) -> (a, b, c, d, e)) <$> decodeNested 0 vs
 
 instance (CasType a, CasType b, CasType c, CasType d, CasType e,
           CasType f) => CasValues (a, b, c, d, e, f) where
-    encodeValues (a, b, c, d, e, f) =
-        encodeNested 0 (a, (b, (c, (d, (e, (f, ()))))))
     decodeValues vs = (\(a, (b, (c, (d, (e, (f, ())))))) ->
         (a, b, c, d, e, f)) <$> decodeNested 0 vs
 
 instance (CasType a, CasType b, CasType c, CasType d, CasType e,
           CasType f, CasType g) => CasValues (a, b, c, d, e, f, g) where
-    encodeValues (a, b, c, d, e, f, g) =
-        encodeNested 0 (a, (b, (c, (d, (e, (f, (g, ())))))))
     decodeValues vs = (\(a, (b, (c, (d, (e, (f, (g, ()))))))) ->
         (a, b, c, d, e, f, g)) <$> decodeNested 0 vs
 
